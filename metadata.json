@@ -1,0 +1,8 @@
+{
+  "name": "Scan Nota Pembelanjaan",
+  "description": "Aplikasi OCR struk pintar untuk melakukan scan, kliping, dan ekstraksi data nota belanja secara instan.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

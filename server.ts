@@ -48,11 +48,12 @@ app.post("/api/scan-receipt", async (req, res) => {
       return res.status(400).json({ error: "Data gambar tidak ditemukan dalam request." });
     }
 
-    // Clean base64 string
-    const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
+    // Clean base64 string safely using split on split indicators
+    const partsVal = image.split(";base64,");
+    const base64Data = partsVal.length > 1 ? partsVal[1].trim() : partsVal[0].trim();
     const actualMimeType = mimeType || "image/jpeg";
 
-    const hasApiKey = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY";
+    const hasApiKey = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY" && process.env.GEMINI_API_KEY !== "";
 
     if (!hasApiKey) {
       console.warn("GEMINI_API_KEY is not configured or still matches placeholder. Using fallback intelligent simulator.");
@@ -75,119 +76,172 @@ app.post("/api/scan-receipt", async (req, res) => {
       "Kategorikan setiap baris barang ke dalam salah satu kategori bahasa Indonesia berikut secara otomatis: " +
       "'Makanan', 'Minuman', 'Kebutuhan Rumah', 'Elektronik', 'Pakaian', 'Kesehatan/Kecantikan', atau 'Lainnya'.";
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: [
-        {
-          inlineData: {
-            mimeType: actualMimeType,
-            data: base64Data,
-          },
+    const schemaConfig = {
+      type: Type.OBJECT,
+      required: ["storeName", "items", "grandTotal"],
+      properties: {
+        storeName: {
+          type: Type.STRING,
+          description: "Nama perusahaan, market, restoran, atau pertokoan yang menerbitkan struk.",
         },
-        {
-          text: prompt,
+        storeAddress: {
+          type: Type.STRING,
+          description: "Alamat lengkap alamat toko belanjaan.",
         },
-      ],
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          required: ["storeName", "items", "grandTotal", "subtotal", "tax"],
-          properties: {
-            storeName: {
-              type: Type.STRING,
-              description: "Nama perusahaan, market, restoran, atau pertokoan yang menerbitkan struk.",
-            },
-            storeAddress: {
-              type: Type.STRING,
-              description: "Alamat lengkap alamat toko belanjaan.",
-            },
-            storePhone: {
-              type: Type.STRING,
-              description: "Nomor telepon toko belanjaan jika tertera.",
-            },
-            date: {
-              type: Type.STRING,
-              description: "Tanggal pembelian transaksi dalam format internasional YYYY-MM-DD.",
-            },
-            time: {
-              type: Type.STRING,
-              description: "Waktu jam menit transaksi dalam format HH:MM.",
-            },
-            receiptNumber: {
-              type: Type.STRING,
-              description: "ID struk, nomor transaksi, nomor invoice atau nomor struk.",
-            },
-            paymentMethod: {
-              type: Type.STRING,
-              description: "Metode pembayaran seperti CASH/Tunai, DEBIT, CREDIT Card, QRIS, dll.",
-            },
-            items: {
-              type: Type.ARRAY,
-              description: "Daftar barang belanjaan yang terdaftar pada struk.",
-              items: {
-                type: Type.OBJECT,
-                required: ["name", "quantity", "unitPrice", "totalPrice", "category"],
-                properties: {
-                  name: { type: Type.STRING, description: "Nama lengkap barang/produk/jasa." },
-                  quantity: { type: Type.NUMBER, description: "Jumlah barang yang dibeli." },
-                  unitPrice: { type: Type.NUMBER, description: "Harga per satu unit barang sebelum diskon/pajak." },
-                  totalPrice: { type: Type.NUMBER, description: "Total harga barang (quantity * unitPrice)." },
-                  category: {
-                    type: Type.STRING,
-                    description: "Kategori barang wajib dipilih dari: 'Makanan', 'Minuman', 'Kebutuhan Rumah', 'Elektronik', 'Pakaian', 'Kesehatan/Kecantikan', atau 'Lainnya'.",
-                  },
-                },
+        storePhone: {
+          type: Type.STRING,
+          description: "Nomor telepon toko belanjaan jika tertera.",
+        },
+        date: {
+          type: Type.STRING,
+          description: "Tanggal pembelian transaksi dalam format internasional YYYY-MM-DD.",
+        },
+        time: {
+          type: Type.STRING,
+          description: "Waktu jam menit transaksi dalam format HH:MM.",
+        },
+        receiptNumber: {
+          type: Type.STRING,
+          description: "ID struk, nomor transaksi, nomor invoice atau nomor struk.",
+        },
+        paymentMethod: {
+          type: Type.STRING,
+          description: "Metode pembayaran seperti CASH/Tunai, DEBIT, CREDIT Card, QRIS, dll.",
+        },
+        items: {
+          type: Type.ARRAY,
+          description: "Daftar barang belanjaan yang terdaftar pada struk.",
+          items: {
+            type: Type.OBJECT,
+            required: ["name", "totalPrice"],
+            properties: {
+              name: { type: Type.STRING, description: "Nama lengkap barang/produk/jasa." },
+              quantity: { type: Type.NUMBER, description: "Jumlah barang yang dibeli." },
+              unitPrice: { type: Type.NUMBER, description: "Harga per satu unit barang sebelum diskon/pajak." },
+              totalPrice: { type: Type.NUMBER, description: "Total harga barang (quantity * unitPrice)." },
+              category: {
+                type: Type.STRING,
+                description: "Kategori barang wajib dipilih dari: 'Makanan', 'Minuman', 'Kebutuhan Rumah', 'Elektronik', 'Pakaian', 'Kesehatan/Kecantikan', atau 'Lainnya'.",
               },
             },
-            subtotal: { type: Type.NUMBER, description: "Subtotal biaya barang sebelum pajak/biaya tambahan." },
-            tax: { type: Type.NUMBER, description: "Jumlah PPN / pajak pertambahan nilai yang dikenakan." },
-            serviceCharge: { type: Type.NUMBER, description: "Biaya layanan toko jika ada (misal di restoran) atau biaya tambahan." },
-            discount: { type: Type.NUMBER, description: "Total diskon pengetongan harga kupon belanja jika ada." },
-            grandTotal: { type: Type.NUMBER, description: "Total akhir pembayaran bersih yang harus dibayar setelah subtotal + pajak + layanan - diskon." },
-            notes: { type: Type.STRING, description: "Catatan tambahan atau slogan promosi." },
-            ocrSegments: {
-              type: Type.ARRAY,
-              description: "Kumpulan segmen baris teks OCR terdeteksi beserta estimasi koordinat bounding box pada struk.",
-              items: {
-                type: Type.OBJECT,
-                required: ["text", "confidence", "boundingBox"],
-                properties: {
-                  text: { type: Type.STRING, description: "Kalimat teks baris yang terdeteksi OCR." },
-                  confidence: { type: Type.NUMBER, description: "Keyakinan OCR (nilai desimal 0.0 s.d 1.0)." },
-                  boundingBox: {
-                    type: Type.ARRAY,
-                    description: "Koordinat [top, left, width, height] sebagai persentase dari ukuran gambar struk (0-100).",
-                    items: { type: Type.NUMBER },
-                  },
-                },
+          },
+        },
+        subtotal: { type: Type.NUMBER, description: "Subtotal biaya barang sebelum pajak/biaya tambahan." },
+        tax: { type: Type.NUMBER, description: "Jumlah PPN / pajak pertambahan nilai yang dikenakan." },
+        serviceCharge: { type: Type.NUMBER, description: "Biaya layanan toko jika ada (misal di restoran) atau biaya tambahan." },
+        discount: { type: Type.NUMBER, description: "Total diskon pengetongan harga kupon belanja jika ada." },
+        grandTotal: { type: Type.NUMBER, description: "Total akhir pembayaran bersih yang harus dibayar setelah subtotal + pajak + layanan - diskon." },
+        notes: { type: Type.STRING, description: "Catatan tambahan atau slogan promosi." },
+        ocrSegments: {
+          type: Type.ARRAY,
+          description: "Kumpulan segmen baris teks OCR terdeteksi beserta estimasi koordinat bounding box pada struk.",
+          items: {
+            type: Type.OBJECT,
+            required: ["text", "boundingBox"],
+            properties: {
+              text: { type: Type.STRING, description: "Kalimat teks baris yang terdeteksi OCR." },
+              confidence: { type: Type.NUMBER, description: "Keyakinan OCR (nilai desimal 0.0 s.d 1.0)." },
+              boundingBox: {
+                type: Type.ARRAY,
+                description: "Koordinat [top, left, width, height] sebagai persentase dari ukuran gambar struk (0-100).",
+                items: { type: Type.NUMBER },
               },
             },
           },
         },
       },
-    });
+    };
 
-    const textResult = response.text;
-    if (!textResult) {
-      throw new Error("Tidak ada output teks yang diperoleh dari Gemini.");
+    const modelsToTry = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-1.5-flash"];
+    let response = null;
+    let lastError: any = null;
+
+    for (const currentModel of modelsToTry) {
+      try {
+        console.log(`Mencoba memproses model: ${currentModel}...`);
+        response = await ai.models.generateContent({
+          model: currentModel,
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: actualMimeType,
+                  data: base64Data,
+                },
+              },
+              {
+                text: prompt,
+              },
+            ],
+          },
+          config: {
+            systemInstruction,
+            responseMimeType: "application/json",
+            responseSchema: schemaConfig,
+          },
+        });
+
+        if (response && response.text) {
+          console.log(`Sukses memproses menggunakan model: ${currentModel}`);
+          break;
+        }
+      } catch (err: any) {
+        console.warn(`Gagal memproses dengan model ${currentModel}, mencoba model berikutnya. Error:`, err.message || err);
+        lastError = err;
+      }
     }
+
+    if (!response || !response.text) {
+      throw lastError || new Error("Semua model Gemini gagal memproses request OCR.");
+    }
+
+    let textResult = response.text;
+    if (!textResult) {
+      throw new Error("Tidak ada output teks (response.text) yang diperoleh dari model Gemini.");
+    }
+
+    // Clean potential markdown blocks gracefully
+    textResult = textResult.trim();
+    if (textResult.startsWith("```")) {
+      textResult = textResult.replace(/^```(json)?\s*/i, "");
+      textResult = textResult.replace(/\s*```$/, "");
+    }
+    textResult = textResult.trim();
 
     const parsedData = JSON.parse(textResult);
     
-    // Assign stable IDs to items and segments
+    // Auto-compute subtotal and fallback items values to maximize resiliency
     if (parsedData.items && Array.isArray(parsedData.items)) {
-      parsedData.items = parsedData.items.map((item: any, i: number) => ({
-        ...item,
-        id: `item-${Date.now()}-${i}`,
-      }));
+      parsedData.items = parsedData.items.map((item: any, i: number) => {
+        const qty = item.quantity ?? 1;
+        const totPrice = item.totalPrice ?? 0;
+        const uPrice = item.unitPrice ?? (qty > 0 ? Math.round(totPrice / qty) : totPrice);
+        return {
+          ...item,
+          id: `item-${Date.now()}-${i}`,
+          quantity: qty,
+          unitPrice: uPrice,
+          totalPrice: totPrice || (qty * uPrice),
+          category: item.category ?? "Lainnya"
+        };
+      });
+    } else {
+      parsedData.items = [];
     }
+
+    // Calculate fallbacks for fields
+    parsedData.subtotal = parsedData.subtotal ?? parsedData.grandTotal ?? 0;
+    parsedData.tax = parsedData.tax ?? 0;
+    parsedData.serviceCharge = parsedData.serviceCharge ?? 0;
+    parsedData.discount = parsedData.discount ?? 0;
+    parsedData.grandTotal = parsedData.grandTotal ?? parsedData.subtotal;
     
     if (parsedData.ocrSegments && Array.isArray(parsedData.ocrSegments)) {
       parsedData.ocrSegments = parsedData.ocrSegments.map((seg: any, i: number) => ({
         ...seg,
         id: `seg-${Date.now()}-${i}`,
+        confidence: seg.confidence ?? 0.95,
+        boundingBox: Array.isArray(seg.boundingBox) && seg.boundingBox.length === 4 ? seg.boundingBox : [15 + (i * 4), 15, 3.5, 70]
       }));
     } else {
       // Create defaults based on items if missing to render interactive highlights anyway
@@ -196,10 +250,10 @@ app.post("/api/scan-receipt", async (req, res) => {
 
     res.json(parsedData);
   } catch (err: any) {
-    console.error("Scan Error:", err);
+    console.error("Scan Error detail log:", err);
     res.status(500).json({
       error: "Gagal memproses gambar struk pembelanjaan menggunakan AI OCR.",
-      details: err.message,
+      details: err.stack || err.message || String(err),
     });
   }
 });

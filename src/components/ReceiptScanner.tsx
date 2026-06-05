@@ -31,6 +31,8 @@ export default function ReceiptScanner({ onScanComplete, onCancel }: ReceiptScan
   const [isScanning, setIsScanning] = useState(false);
   const [scanStep, setScanStep] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
+  const [isDetailsExpanded, setIsDetailsExpanded] = useState(false);
 
   // Camera management states
   const [isCameraActive, setIsCameraActive] = useState(false);
@@ -116,8 +118,54 @@ export default function ReceiptScanner({ onScanComplete, onCancel }: ReceiptScan
     setIsCameraActive(false);
   };
 
+  // Helper to resize/compress images client-side before sending to server (saves network and avoids timeout / limit errors)
+  const resizeAndCompressImage = (dataUrl: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = dataUrl;
+      img.onload = () => {
+        const MAX_WIDTH = 1200;
+        const MAX_HEIGHT = 1200;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+          if (width > height) {
+            height = Math.round((height * MAX_WIDTH) / width);
+            width = MAX_WIDTH;
+          } else {
+            width = Math.round((width * MAX_HEIGHT) / height);
+            height = MAX_HEIGHT;
+          }
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        
+        if (!ctx) {
+          resolve(dataUrl); // fallback to original if context creation fails
+          return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Output compressed JPEG
+        const compressedBase64 = canvas.toDataURL("image/jpeg", 0.82);
+        resolve(compressedBase64);
+      };
+      
+      img.onerror = () => {
+        resolve(dataUrl); // fallback to original
+      };
+    });
+  };
+
   // Capture image frame from stream to canvas
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     if (!videoRef.current) return;
     try {
       const video = videoRef.current;
@@ -130,8 +178,13 @@ export default function ReceiptScanner({ onScanComplete, onCancel }: ReceiptScan
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-        setImageSrc(dataUrl);
+        
+        // Compress captured frame
+        const compressed = await resizeAndCompressImage(dataUrl);
+        setImageSrc(compressed);
         setMimeType("image/jpeg");
+        setErrorDetails(null);
+        setIsDetailsExpanded(false);
         stopCamera();
       }
     } catch (err) {
@@ -153,12 +206,17 @@ export default function ReceiptScanner({ onScanComplete, onCancel }: ReceiptScan
     }
     
     setErrorMessage(null);
-    setMimeType(file.type);
+    setErrorDetails(null);
+    setIsDetailsExpanded(false);
+    setMimeType("image/jpeg"); // standardizing on compiled JPEGs
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       if (event.target?.result) {
-        setImageSrc(event.target.result as string);
+        const rawDataUrl = event.target.result as string;
+        // Compress uploaded files instantly to save proxy timeout limits
+        const compressed = await resizeAndCompressImage(rawDataUrl);
+        setImageSrc(compressed);
         stopCamera();
       }
     };
@@ -191,6 +249,8 @@ export default function ReceiptScanner({ onScanComplete, onCancel }: ReceiptScan
     if (!imageSrc) return;
     setIsScanning(true);
     setErrorMessage(null);
+    setErrorDetails(null);
+    setIsDetailsExpanded(false);
 
     try {
       const response = await fetch("/api/scan-receipt", {
@@ -206,6 +266,7 @@ export default function ReceiptScanner({ onScanComplete, onCancel }: ReceiptScan
 
       if (!response.ok) {
         const errData = await response.json();
+        setErrorDetails(errData.details || null);
         throw new Error(errData.error || `HTTP error ${response.status}`);
       }
 
@@ -258,9 +319,25 @@ export default function ReceiptScanner({ onScanComplete, onCancel }: ReceiptScan
               className="mb-6 flex gap-3 rounded-xl border border-rose-100 bg-rose-50 p-4 text-xs font-semibold leading-relaxed text-rose-700 items-start shadow-xs"
             >
               <AlertTriangle className="h-5 w-5 shrink-0" />
-              <div className="space-y-1">
+              <div className="space-y-1 w-full">
                 <span className="font-bold">Eror Pemindaian</span>
                 <p>{errorMessage}</p>
+                {errorDetails && (
+                  <div className="mt-2 pt-2 border-t border-rose-100">
+                    <button
+                      type="button"
+                      onClick={() => setIsDetailsExpanded(!isDetailsExpanded)}
+                      className="text-[10px] font-mono underline hover:text-rose-900 flex items-center gap-1 cursor-pointer"
+                    >
+                      {isDetailsExpanded ? "Sembunyikan detail teknis" : "Tampilkan detail teknis"}
+                    </button>
+                    {isDetailsExpanded && (
+                      <pre className="mt-1.5 p-2 bg-rose-900/10 rounded-lg text-[9px] font-mono overflow-auto max-h-36 text-rose-800 leading-tight select-all">
+                        {errorDetails}
+                      </pre>
+                    )}
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
